@@ -1,0 +1,40 @@
+{
+	"geode": "6.0.0-alpha.1",
+	"gd": {
+		"win": "2.2091",
+		"android": "2.2091",
+		"mac": "2.2091",
+		"ios": "2.2091"
+	},
+	"id": "shaq.click-fix",
+	"name": "Click Fix",
+	"version": "v0.1.0",
+	"developer": "Shaq",
+	"description": "Corrige el timing de tus clics en todos los vehículos para que no mueras por clic temprano o tardío.",
+	"settings": {
+		"enabled": {
+			"type": "bool",
+			"default": true,
+			"name": "Activado",
+			"description": "Enciende o apaga la corrección de clics."
+		},
+		"window": {
+			"type": "int",
+			"default": 6,
+			"min": 1,
+			"max": 15,
+			"name": "Ventana de corrección (frames)",
+			"description": "Cuántos frames antes o después puede mover tu clic. Más alto = más ayuda, más lag al corregir.",
+			"control": { "slider": true, "arrows": true }
+		},
+		"lookahead": {
+			"type": "int",
+			"default": 20,
+			"min": 5,
+			"max": 60,
+			"name": "Verificación hacia adelante (frames)",
+			"description": "Cuántos frames simula después para confirmar que de verdad sobrevives.",
+			"control": { "slider": true, "arrows": true }
+		}
+	}
+}
