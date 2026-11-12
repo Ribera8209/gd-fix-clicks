@@ -3461,7 +3461,7 @@ finally {
         void ccTouchEnded(CCTouch* touch, CCEvent* event) override;
         void ccTouchCancelled(CCTouch* touch, CCEvent* event) override;
         void registerWithTouchDispatcher() override;
-        void scrollWheel(float y, float x) override;
+        bool scrollWheel(float y, float x) override;
 
     private:
         enum class HitTarget {
@@ -5340,30 +5340,32 @@ finally {
         CCDirector::get()->getTouchDispatcher()->addTargetedDelegate(this, -1000, true);
     }
 
-    void AfterflowOverlay::scrollWheel(float y, float) {
+    bool AfterflowOverlay::scrollWheel(float y, float) {
         if (!m_isOpen || !m_deck || !m_deck->isVisible() || m_tutorialStep >= 0 || m_creditsLayer) {
-            return;
+            return false;
         }
         float const steps = std::clamp(y, -3.f, 3.f);
         if (steps == 0.f) {
-            return;
+            return false;
         }
         CCPoint const mouse = geode::cocos::getMousePos();
         CCPoint const deckPoint = m_deck->convertToNodeSpace(mouse);
         if (!CCRect(0.f, 0.f, DECK_WIDTH, DECK_HEIGHT).containsPoint(deckPoint)) {
-            return;
+            return false;
         }
         if (m_logLayer) {
             if (logViewListRect().containsPoint(deckPoint)) {
                 m_logViewScroll += steps;
                 refresh();
             }
-            return;
+            return false;
         }
         if (m_activeTab == 0 && logPaneRect().containsPoint(deckPoint)) {
             m_logScroll += steps;
             refresh();
+            return true;
         }
+        return false;
     }
 
     bool AfterflowOverlay::ccTouchBegan(CCTouch* touch, CCEvent*) {
