@@ -54,6 +54,27 @@
 
 using namespace geode::prelude;
 
+// Port 2.2091: en macOS no se exporta el typeinfo de RingObject/DashRingObject,
+// así que se identifican por tipo de objeto en vez de typeinfo_cast.
+static bool afIsRingObject(GameObject* obj) {
+    if (!obj) return false;
+    switch (obj->m_objectType) {
+        case GameObjectType::YellowJumpRing: case GameObjectType::PinkJumpRing:
+        case GameObjectType::GravityRing: case GameObjectType::GreenRing:
+        case GameObjectType::DropRing: case GameObjectType::RedJumpRing:
+        case GameObjectType::CustomRing: case GameObjectType::DashRing:
+        case GameObjectType::GravityDashRing: case GameObjectType::SpiderOrb:
+        case GameObjectType::TeleportOrb:
+            return true;
+        default: return false;
+    }
+}
+static bool afIsDashRing(GameObject* obj) {
+    return obj && (obj->m_objectType == GameObjectType::DashRing ||
+                   obj->m_objectType == GameObjectType::GravityDashRing);
+}
+
+
 namespace {
 
     constexpr int MOD_HOOK_PRIORITY = -1000000;
@@ -7500,7 +7521,7 @@ finally {
                     continue;
                 }
 
-                if (typeinfo_cast<DashRingObject*>(candidateProbe.ringObject)) {
+                if (afIsDashRing(candidateProbe.ringObject)) {
                     float orbRadius = orbSpriteRadius(candidateProbe.ringObject);
                     if (candidateProbe.closeDistanceSquared > orbRadius * orbRadius * 2.25f) {
                         continue;
@@ -9006,7 +9027,7 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
                 return false;
             }
 
-            if (typeinfo_cast<RingObject*>(effectObject)) {
+            if (afIsRingObject(effectObject)) {
                 if (state.usedOrbs.contains(effectObject)) {
                     return false;
                 }
@@ -9148,7 +9169,7 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
         GJBaseGameLayer::playerTouchedRing(playerObject, ringObject);
 
         if (state.isSimulating && state.orbClickEnabled) {
-            if (typeinfo_cast<DashRingObject*>(ringObject)) {
+            if (afIsDashRing(ringObject)) {
                 return;
             }
             bool isFirst = playerObject == state.ghostPlayer1;
