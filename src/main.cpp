@@ -1,16 +1,17 @@
-// Click Fix — corrige el timing de tus clics en Geometry Dash (todos los vehículos).
-// Objetivo: Geometry Dash 2.209x (2.2091) + Geode v6.
+// Click Fix v0.2 — Geometry Dash 2.209x (2.2091) + Geode v6
 //
-// Cómo funciona:
-//  1. Cada frame guarda una "foto" del estado del nivel (CheckpointObject) en un buffer corto.
-//  2. Registra en qué frame diste cada clic (presionar / soltar).
-//  3. Si vas a morir y diste un clic hace poco (dentro de la "ventana"), NO te mata todavía:
-//     rebobina, prueba mover ese clic unos frames antes o después, y simula hacia adelante.
-//  4. Si encuentra un momento en que sobrevives (y sigues vivo "lookahead" frames después),
-//     aplica ese clic corregido. Si no, mueres normal.
+// Cómo funciona (modo predictivo):
+//  1. Cuando das clic (o sueltas), el mod NO se lo pasa al juego de inmediato.
+//  2. Simula en secreto: "si salto AHORA, ¿sobrevivo los próximos X ms?"
+//  3. Si sí  -> salta ahora (como siempre).
+//     Si no  -> prueba retrasar el salto 1, 2, 3... frames hasta encontrar
+//               el momento en que sí pasas el pincho, y salta justo ahí.
+//  4. Después de cada simulación restaura el estado exacto, así que en
+//     pantalla nunca ves el juego adelantarse ni regresar.
 //
-// Como usa la simulación real del juego, funciona igual para cubo, nave, bola, UFO,
-// wave, robot, araña y swing.
+// Funciona con todos los vehículos porque usa la física real del juego.
+// Limitación: sólo puede RETRASAR un clic temprano. Un clic tardío ya pasó
+// y no se puede corregir sin regresar el tiempo.
 
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
@@ -18,7 +19,8 @@
 
 #include <deque>
 #include <vector>
-#include <climits>
+#include <map>
+#include <cmath>
 #include <algorithm>
 
 using namespace geode::prelude;
@@ -27,125 +29,140 @@ namespace {
 
 constexpr int JUMP_BUTTON = 1;
 
-struct InputEvent {
-    int step;
-    bool down;
-    bool p1;
-};
-
-struct Snapshot {
-    int step;     // estado ANTES del update número `step`
-    float dt;     // dt que se usó en ese update
-    Ref<CheckpointObject> cp;
-    bool heldP1;
-    bool heldP2;
-};
+struct NewInput { bool down; bool p1; };
+struct PendingInput { double fireTime; bool down; bool p1; };
 
 struct State {
-    int step = 0;
-    bool simulating = false;  // corriendo simulación interna
-    bool simDied = false;     // murió durante la simulación
-    bool pendingFix = false;  // hay una muerte pendiente de corregir
-    bool bypass = false;      // dejar pasar la muerte real
-    bool heldP1 = false;
-    bool heldP2 = false;
-    std::deque<Snapshot> snaps;
-    std::vector<InputEvent> inputs;
+    bool internal = false;    // input generado por el mod (no interceptar)
+    bool simulating = false;  // dentro de una simulación
+    bool simDied = false;
+    double time = 0.0;        // tiempo real acumulado del intento
+    double lastShift = 0.0;   // retraso aplicado al último input
+    std::vector<NewInput> incoming;
+    std::deque<PendingInput> pending;
 
     void reset() {
-        step = 0;
-        simulating = simDied = pendingFix = bypass = false;
-        snaps.clear();
-        inputs.clear();
-        // heldP1/heldP2 reflejan el botón físico; no se borran.
+        internal = simulating = simDied = false;
+        time = 0.0;
+        lastShift = 0.0;
+        incoming.clear();
+        pending.clear();
     }
 } g;
 
 bool modEnabled() { return Mod::get()->getSettingValue<bool>("enabled"); }
-int windowFrames() { return static_cast<int>(Mod::get()->getSettingValue<int64_t>("window")); }
-int lookaheadFrames() { return static_cast<int>(Mod::get()->getSettingValue<int64_t>("lookahead")); }
+double maxDelay() { return Mod::get()->getSettingValue<int64_t>("max-delay") / 1000.0; }
+double lookahead() { return Mod::get()->getSettingValue<int64_t>("lookahead") / 1000.0; }
 
-Snapshot* findSnap(int step) {
-    for (auto& s : g.snaps) if (s.step == step) return &s;
-    return nullptr;
-}
+// ---------- Guardar / restaurar estado completo ----------
 
-float dtForStep(int step, float fallback) {
-    if (auto s = findSnap(step)) return s->dt;
-    return fallback;
-}
+struct TrailSave {
+    Ref<CCArray> points;
+    CCPoint current;
+};
 
-// Carga una foto y deja el botón presionado/suelto como estaba en ese momento.
-void restoreSnap(PlayLayer* pl, Snapshot const& s) {
-    bool prev = g.simulating;
-    g.simulating = true;
-    pl->loadFromCheckpoint(s.cp);
-    pl->handleButton(false, JUMP_BUTTON, true);
-    if (s.heldP1) pl->handleButton(true, JUMP_BUTTON, true);
-    if (pl->m_gameState.m_isDualMode) {
-        pl->handleButton(false, JUMP_BUTTON, false);
-        if (s.heldP2) pl->handleButton(true, JUMP_BUTTON, false);
+struct SavedState {
+    Ref<CheckpointObject> cp;
+    double extraDelta = 0;
+    int currentStep = 0;
+    bool started = false;
+    std::vector<PlayerButtonCommand> queued;
+    double currentTime = 0;
+    double attemptTime = 0;
+    std::map<int, bool> hold1, hold2;
+    TrailSave wave1, wave2;
+};
+
+TrailSave saveTrail(PlayerObject* p) {
+    TrailSave t;
+    if (p && p->m_waveTrail && p->m_waveTrail->m_pointArray) {
+        t.points = CCArray::create();
+        t.points->addObjectsFromArray(p->m_waveTrail->m_pointArray);
+        t.current = p->m_waveTrail->m_currentPoint;
     }
-    g.simulating = prev;
+    return t;
 }
 
-// Simula desde `from` hasta `to` (sin incluir) con la lista de inputs dada.
-// Devuelve true si el jugador NO murió.
-bool simulate(PlayLayer* pl, int from, int to, std::vector<InputEvent> const& evs, float dtNow) {
-    auto snap = findSnap(from);
-    if (!snap) return false;
-    restoreSnap(pl, *snap);
+void restoreTrail(PlayerObject* p, TrailSave const& t) {
+    if (p && p->m_waveTrail && p->m_waveTrail->m_pointArray && t.points) {
+        p->m_waveTrail->m_pointArray->removeAllObjects();
+        p->m_waveTrail->m_pointArray->addObjectsFromArray(t.points);
+        p->m_waveTrail->m_currentPoint = t.current;
+    }
+}
 
+SavedState saveState(PlayLayer* pl) {
+    SavedState s;
+    s.cp = pl->createCheckpoint();
+    s.extraDelta = pl->m_extraDelta;
+    s.currentStep = pl->m_currentStep;
+    s.started = pl->m_started;
+    s.queued = pl->m_queuedButtons;
+    s.currentTime = pl->m_currentTime;
+    s.attemptTime = pl->m_attemptTime;
+    if (pl->m_player1) { s.hold1 = pl->m_player1->m_holdingButtons; s.wave1 = saveTrail(pl->m_player1); }
+    if (pl->m_player2) { s.hold2 = pl->m_player2->m_holdingButtons; s.wave2 = saveTrail(pl->m_player2); }
+    return s;
+}
+
+void restoreState(PlayLayer* pl, SavedState const& s) {
+    if (s.cp) pl->loadFromCheckpoint(s.cp);
+    pl->m_extraDelta = s.extraDelta;
+    pl->m_currentStep = s.currentStep;
+    pl->m_started = s.started;
+    pl->m_queuedButtons = s.queued;
+    pl->m_currentTime = s.currentTime;
+    pl->m_attemptTime = s.attemptTime;
+    if (pl->m_player1) { pl->m_player1->m_holdingButtons = s.hold1; restoreTrail(pl->m_player1, s.wave1); }
+    if (pl->m_player2) { pl->m_player2->m_holdingButtons = s.hold2; restoreTrail(pl->m_player2, s.wave2); }
+}
+
+void sendToGame(PlayLayer* pl, bool down, bool p1) {
+    g.internal = true;
+    pl->handleButton(down, JUMP_BUTTON, p1);
+    g.internal = false;
+}
+
+// ---------- Predicción ----------
+
+// Simula: espera `delaySteps` frames, aplica el input, y sigue `lookSteps` frames.
+// Devuelve true si el jugador sobrevive.
+bool simulateOnce(PlayLayer* pl, NewInput const& in, int delaySteps, int lookSteps, float simDt) {
     g.simulating = true;
     g.simDied = false;
-    for (int s = from; s < to && !g.simDied; ++s) {
-        for (auto const& e : evs) {
-            if (e.step == s) pl->handleButton(e.down, JUMP_BUTTON, e.p1);
-        }
-        pl->update(dtForStep(s, dtNow));
+    int total = delaySteps + lookSteps;
+    for (int s = 0; s < total && !g.simDied; ++s) {
+        if (s == delaySteps) sendToGame(pl, in.down, in.p1);
+        pl->update(simDt);
     }
     g.simulating = false;
     return !g.simDied;
 }
 
-// Intenta mover el último clic para evitar la muerte.
-bool tryFix(PlayLayer* pl, float dtNow) {
-    int now = g.step;            // el update que está por correr
-    int deathStep = now - 1;     // el update en el que se murió
-    int W = windowFrames();
-    int L = lookaheadFrames();
+// Devuelve cuántos segundos hay que retrasar el input (0 = ahora).
+double findBestDelay(PlayLayer* pl, NewInput const& in, float dt) {
+    if (!pl->m_player1 || pl->m_player1->m_isDead) return 0.0;
 
-    if (g.inputs.empty()) return false;
-    auto& ev = g.inputs.back();
-    if (deathStep - ev.step > W) return false;
+    // Paso de simulación: el dt real, pero no menor a 1/120 s para no trabar el juego.
+    float simDt = std::max(dt, 1.0f / 120.0f);
+    int maxSteps = static_cast<int>(std::ceil(maxDelay() / simDt));
+    int lookSteps = std::max(1, static_cast<int>(std::ceil(lookahead() / simDt)));
 
-    int prevLimit = g.inputs.size() > 1 ? g.inputs[g.inputs.size() - 2].step : INT_MIN;
+    auto& audio = *FMODAudioEngine::sharedEngine();
+    float sfxVol = audio.m_sfxVolume;
+    audio.m_sfxVolume = 0.f;   // sin sonidos durante la simulación
 
-    for (int d = 1; d <= W; ++d) {
-        for (int sign : {-1, +1}) {          // primero un poco antes, luego un poco después
-            int ns = ev.step + sign * d;
-            if (ns <= prevLimit || ns > deathStep) continue;
-            int from = std::min(ev.step, ns);
-            if (!findSnap(from)) continue;
-
-            std::vector<InputEvent> evs;
-            for (auto const& e : g.inputs) if (e.step >= from) evs.push_back(e);
-            evs.back().step = ns;
-
-            if (simulate(pl, from, now + L, evs, dtNow)) {
-                // Sobrevive: volver a simular sólo hasta "ahora" para no adelantar el juego.
-                simulate(pl, from, now, evs, dtNow);
-                ev.step = ns;
-                g.snaps.erase(
-                    std::remove_if(g.snaps.begin(), g.snaps.end(),
-                        [from](Snapshot const& s) { return s.step > from; }),
-                    g.snaps.end());
-                log::debug("Click corregido: {} frames", sign * d);
-                return true;
-            }
-        }
+    SavedState saved = saveState(pl);
+    double result = 0.0;
+    for (int k = 0; k <= maxSteps; ++k) {
+        bool ok = simulateOnce(pl, in, k, lookSteps, simDt);
+        restoreState(pl, saved);
+        if (ok) { result = k * simDt; break; }
     }
-    return false;
+
+    audio.m_sfxVolume = sfxVol;
+    if (result > 0) log::debug("Click Fix: input retrasado {:.0f} ms", result * 1000.0);
+    return result;
 }
 
 } // namespace
@@ -155,63 +172,61 @@ class $modify(CFBaseLayer, GJBaseGameLayer) {
         auto pl = PlayLayer::get();
         bool ours = pl && static_cast<GJBaseGameLayer*>(pl) == this;
 
-        if (ours && !g.simulating && button == JUMP_BUTTON) {
-            if (isPlayer1) g.heldP1 = down; else g.heldP2 = down;
-            if (modEnabled()) {
-                g.inputs.push_back({ g.step, down, isPlayer1 });
-                if (g.inputs.size() > 64) g.inputs.erase(g.inputs.begin());
-            }
+        // Interceptar sólo clics reales del jugador en un nivel.
+        if (ours && !g.internal && !g.simulating && button == JUMP_BUTTON && modEnabled()) {
+            g.incoming.push_back({ down, isPlayer1 });
+            return;
         }
         GJBaseGameLayer::handleButton(down, button, isPlayer1);
     }
 
     void update(float dt) {
         auto pl = PlayLayer::get();
-        if (g.simulating || !pl || static_cast<GJBaseGameLayer*>(pl) != this || !modEnabled()) {
+        if (g.simulating || !pl || static_cast<GJBaseGameLayer*>(pl) != this) {
             GJBaseGameLayer::update(dt);
             return;
         }
 
-        if (g.pendingFix) {
-            g.pendingFix = false;
-            if (!tryFix(pl, dt)) {
-                // No hubo forma: repetir el frame de la muerte y dejar que pase de verdad.
-                int deathStep = g.step - 1;
-                if (auto s = findSnap(deathStep)) {
-                    restoreSnap(pl, *s);
-                    for (auto const& e : g.inputs) {
-                        if (e.step == deathStep) {
-                            g.simulating = true;
-                            pl->handleButton(e.down, JUMP_BUTTON, e.p1);
-                            g.simulating = false;
-                        }
-                    }
-                    g.bypass = true;
-                    GJBaseGameLayer::update(s->dt);
-                    g.bypass = false;
-                }
-                g.snaps.clear();
-                g.inputs.clear();
-                return;
-            }
+        // Si se apaga el mod con inputs en espera, soltarlos de inmediato.
+        if (!modEnabled()) {
+            for (auto& p : g.pending) sendToGame(pl, p.down, p.p1);
+            for (auto& n : g.incoming) sendToGame(pl, n.down, n.p1);
+            g.pending.clear();
+            g.incoming.clear();
+            GJBaseGameLayer::update(dt);
+            return;
         }
 
-        // Guardar foto del estado actual (antes de este update).
-        if (pl->m_player1 && !pl->m_player1->m_isDead) {
-            if (auto cp = pl->createCheckpoint()) {
-                g.snaps.push_back({ g.step, dt, cp, g.heldP1, g.heldP2 });
-                size_t maxSnaps = static_cast<size_t>(windowFrames() * 2 + 3);
-                while (g.snaps.size() > maxSnaps) g.snaps.pop_front();
+        // 1. Decidir cuándo aplicar cada input nuevo.
+        for (auto const& in : g.incoming) {
+            double delay;
+            if (!g.pending.empty()) {
+                // Ya hay un input esperando: mantener el mismo retraso para respetar el orden.
+                delay = g.lastShift;
+            } else {
+                delay = findBestDelay(pl, in, dt);
+                g.lastShift = delay;
             }
+            double fire = g.time + delay;
+            if (!g.pending.empty()) fire = std::max(fire, g.pending.back().fireTime);
+            g.pending.push_back({ fire, in.down, in.p1 });
+        }
+        g.incoming.clear();
+
+        // 2. Aplicar los inputs cuyo momento ya llegó.
+        while (!g.pending.empty() && g.pending.front().fireTime <= g.time + 1e-6) {
+            auto p = g.pending.front();
+            g.pending.pop_front();
+            sendToGame(pl, p.down, p.p1);
         }
 
+        // 3. Avanzar el juego normal.
         GJBaseGameLayer::update(dt);
-        g.step++;
+        g.time += dt;
     }
 };
 
 class $modify(CFPlayLayer, PlayLayer) {
-    // En GD 2.209x la firma es init(level, dontCreateObjects)
     bool init(GJGameLevel* level, bool dontCreateObjects) {
         g.reset();
         return PlayLayer::init(level, dontCreateObjects);
@@ -228,22 +243,10 @@ class $modify(CFPlayLayer, PlayLayer) {
     }
 
     void destroyPlayer(PlayerObject* player, GameObject* object) {
-        if (g.simulating) {          // muerte dentro de la simulación: sólo anotarla
+        if (g.simulating) {   // muerte dentro de la simulación: sólo anotarla
             g.simDied = true;
             return;
         }
-        if (g.bypass || !modEnabled() || g.step < 2) {
-            PlayLayer::destroyPlayer(player, object);
-            return;
-        }
-        if (g.pendingFix) return;    // ya se va a revisar en el siguiente frame
-
-        bool recentClick = !g.inputs.empty() &&
-                           (g.step - g.inputs.back().step) <= windowFrames();
-        if (!recentClick) {
-            PlayLayer::destroyPlayer(player, object);
-            return;
-        }
-        g.pendingFix = true;         // posponer la muerte y tratar de corregir el clic
+        PlayLayer::destroyPlayer(player, object);
     }
 };

@@ -3,18 +3,17 @@
 Corrige el timing de tus clics en **todos los vehículos** (cubo, nave, bola, UFO, wave, robot, araña, swing).
 Cuando vas a morir por un clic un poco temprano o tardío, el mod rebobina unos frames, busca el momento correcto para ese clic y lo aplica.
 
-## Cómo funciona
-1. Guarda el estado del nivel en cada frame (buffer corto).
-2. Registra cuándo presionas y sueltas.
-3. Si vas a morir y diste clic hace poco → prueba mover ese clic ±1, ±2… frames.
-4. Si con algún ajuste sobrevives (y sigues vivo unos frames más), lo aplica. Si no, mueres normal.
+## Cómo funciona (v0.2, predictivo)
+1. Cuando das clic, el mod simula en secreto qué pasa si saltas ahora.
+2. Si saltar ahora te mata, prueba retrasar el salto unos milisegundos hasta encontrar el momento en que pasas.
+3. Aplica el salto justo en ese momento. El juego nunca se adelanta ni regresa en pantalla.
 
-Sólo corrige el **último** clic y sólo dentro de la ventana configurada. No juega por ti si no das clic.
+Corrige clics **tempranos** (también al soltar en nave/wave). Un clic tardío no se puede corregir.
 
 ## Ajustes (en Geode → Click Fix → ⚙️)
 - **Activado**
-- **Ventana de corrección** (default 6 frames)
-- **Verificación hacia adelante** (default 20 frames)
+- **Retraso máximo** (default 120 ms)
+- **Revisión hacia adelante** (default 200 ms)
 
 ## Compilar (opción fácil, sin instalar nada)
 1. Crea un repositorio en GitHub y sube esta carpeta.
