@@ -8,9 +8,9 @@
 	},
 	"id": "shaq.click-fix",
 	"name": "Click Fix",
-	"version": "v0.2.0",
+	"version": "v0.3.0",
 	"developer": "Shaq",
-	"description": "Al dar clic, detecta el momento correcto para saltar y lo aplica justo ahí. Todos los vehículos.",
+	"description": "Al dar clic, una copia invisible del jugador detecta el momento correcto y el salto se da justo ahí. Sin teletransporte.",
 	"settings": {
 		"enabled": {
 			"type": "bool",

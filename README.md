@@ -3,12 +3,14 @@
 Corrige el timing de tus clics en **todos los vehículos** (cubo, nave, bola, UFO, wave, robot, araña, swing).
 Cuando vas a morir por un clic un poco temprano o tardío, el mod rebobina unos frames, busca el momento correcto para ese clic y lo aplica.
 
-## Cómo funciona (v0.2, predictivo)
-1. Cuando das clic, el mod simula en secreto qué pasa si saltas ahora.
-2. Si saltar ahora te mata, prueba retrasar el salto unos milisegundos hasta encontrar el momento en que pasas.
-3. Aplica el salto justo en ese momento. El juego nunca se adelanta ni regresa en pantalla.
+## Cómo funciona (v0.3, jugador fantasma)
+1. Al dar clic, una copia invisible del jugador simula el salto con la física real del juego (sólo choca con bloques, pinchos y rampas).
+2. Si saltar ahora te mata, prueba saltar unos frames después hasta encontrar el momento en que pasas.
+3. El salto real se da en ese frame, normal. El nivel y el jugador real nunca se regresan: sin teletransporte ni trabones.
 
-Corrige clics **tempranos** (también al soltar en nave/wave). Un clic tardío no se puede corregir.
+Corrige clics **tempranos** (también al soltar en nave/wave). Un clic tardío no se puede corregir. Cerca de orbes, pads y portales la predicción puede fallar.
+
+Técnica basada en "Show Trajectory" de Eclipse Menu (código abierto).
 
 ## Ajustes (en Geode → Click Fix → ⚙️)
 - **Activado**

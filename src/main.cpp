@@ -1,25 +1,30 @@
-// Click Fix v0.2 — Geometry Dash 2.209x (2.2091) + Geode v6
+// Click Fix v0.3 — Geometry Dash 2.209x (2.2091) + Geode v6
 //
-// Cómo funciona (modo predictivo):
-//  1. Cuando das clic (o sueltas), el mod NO se lo pasa al juego de inmediato.
-//  2. Simula en secreto: "si salto AHORA, ¿sobrevivo los próximos X ms?"
-//  3. Si sí  -> salta ahora (como siempre).
-//     Si no  -> prueba retrasar el salto 1, 2, 3... frames hasta encontrar
-//               el momento en que sí pasas el pincho, y salta justo ahí.
-//  4. Después de cada simulación restaura el estado exacto, así que en
-//     pantalla nunca ves el juego adelantarse ni regresar.
+// Cómo funciona (jugador fantasma):
+//  - Al dar clic, el mod NO toca el nivel. Usa una copia invisible del
+//    jugador ("fantasma") y la mueve con la física real del juego, chocando
+//    sólo contra bloques, pinchos y rampas.
+//  - Prueba: "si salto ahora, ¿el fantasma sobrevive?" Si no, prueba
+//    saltar 1, 2, 3... frames después hasta encontrar el momento que sí pasa.
+//  - El salto real se da en ese frame, de forma normal.
+//  - El jugador real y el nivel nunca se cargan ni se regresan:
+//    sin teletransporte y sin trabones.
 //
-// Funciona con todos los vehículos porque usa la física real del juego.
-// Limitación: sólo puede RETRASAR un clic temprano. Un clic tardío ya pasó
-// y no se puede corregir sin regresar el tiempo.
+// Técnica basada en "Show Trajectory" de Eclipse Menu (código abierto).
+// Limitación: sólo puede RETRASAR un clic temprano; no corrige clics tardíos.
+// El fantasma ignora orbes, pads y portales, así que cerca de ellos la
+// predicción puede fallar.
 
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
+#include <Geode/modify/PlayerObject.hpp>
+#include <Geode/modify/HardStreak.hpp>
+#include <Geode/modify/EffectGameObject.hpp>
+#include <Geode/modify/GameObject.hpp>
 
 #include <deque>
 #include <vector>
-#include <map>
 #include <cmath>
 #include <algorithm>
 
@@ -30,150 +35,120 @@ namespace {
 constexpr int JUMP_BUTTON = 1;
 
 struct NewInput { bool down; bool p1; };
-struct PendingInput { double fireTime; bool down; bool p1; };
+struct PendingInput { int fireFrame; bool down; bool p1; };
 
 struct State {
-    bool internal = false;    // input generado por el mod (no interceptar)
-    bool simulating = false;  // dentro de una simulación
+    // fantasmas
+    PlayerObject* ghost = nullptr;
+    bool simulating = false;
     bool simDied = false;
-    double time = 0.0;        // tiempo real acumulado del intento
-    double lastShift = 0.0;   // retraso aplicado al último input
+
+    // inputs
+    bool internal = false;
+    int frame = 0;               // frames reales del intento
+    int lastShift = 0;           // retraso (en frames) del último input
+    bool heldP1 = false, heldP2 = false;  // lo que ya se le mandó al juego
     std::vector<NewInput> incoming;
     std::deque<PendingInput> pending;
 
-    void reset() {
-        internal = simulating = simDied = false;
-        time = 0.0;
-        lastShift = 0.0;
+    // medición de física
+    float tickDt = 0.25f;        // dt de cada tick de física (unidades de GD)
+    int ticksThisFrame = 0;
+    int ticksPerFrame = 4;
+
+    void resetInputs() {
+        internal = false;
+        frame = 0;
+        lastShift = 0;
+        heldP1 = heldP2 = false;
         incoming.clear();
         pending.clear();
+        ticksThisFrame = 0;
     }
 } g;
 
 bool modEnabled() { return Mod::get()->getSettingValue<bool>("enabled"); }
-double maxDelay() { return Mod::get()->getSettingValue<int64_t>("max-delay") / 1000.0; }
-double lookahead() { return Mod::get()->getSettingValue<int64_t>("lookahead") / 1000.0; }
-
-// ---------- Guardar / restaurar estado completo ----------
-
-struct TrailSave {
-    Ref<CCArray> points;
-    CCPoint current;
-};
-
-struct SavedState {
-    Ref<CheckpointObject> cp;
-    double extraDelta = 0;
-    int currentStep = 0;
-    bool started = false;
-    std::vector<PlayerButtonCommand> queued;
-    double currentTime = 0;
-    double attemptTime = 0;
-    std::map<int, bool> hold1, hold2;
-    TrailSave wave1, wave2;
-};
-
-TrailSave saveTrail(PlayerObject* p) {
-    TrailSave t;
-    if (p && p->m_waveTrail && p->m_waveTrail->m_pointArray) {
-        t.points = CCArray::create();
-        t.points->addObjectsFromArray(p->m_waveTrail->m_pointArray);
-        t.current = p->m_waveTrail->m_currentPoint;
-    }
-    return t;
-}
-
-void restoreTrail(PlayerObject* p, TrailSave const& t) {
-    if (p && p->m_waveTrail && p->m_waveTrail->m_pointArray && t.points) {
-        p->m_waveTrail->m_pointArray->removeAllObjects();
-        p->m_waveTrail->m_pointArray->addObjectsFromArray(t.points);
-        p->m_waveTrail->m_currentPoint = t.current;
-    }
-}
-
-SavedState saveState(PlayLayer* pl) {
-    SavedState s;
-    s.cp = pl->createCheckpoint();
-    s.extraDelta = pl->m_extraDelta;
-    s.currentStep = pl->m_currentStep;
-    s.started = pl->m_started;
-    s.queued = pl->m_queuedButtons;
-    s.currentTime = pl->m_currentTime;
-    s.attemptTime = pl->m_attemptTime;
-    if (pl->m_player1) { s.hold1 = pl->m_player1->m_holdingButtons; s.wave1 = saveTrail(pl->m_player1); }
-    if (pl->m_player2) { s.hold2 = pl->m_player2->m_holdingButtons; s.wave2 = saveTrail(pl->m_player2); }
-    return s;
-}
-
-void restoreState(PlayLayer* pl, SavedState const& s) {
-    if (s.cp) pl->loadFromCheckpoint(s.cp);
-    pl->m_extraDelta = s.extraDelta;
-    pl->m_currentStep = s.currentStep;
-    pl->m_started = s.started;
-    pl->m_queuedButtons = s.queued;
-    pl->m_currentTime = s.currentTime;
-    pl->m_attemptTime = s.attemptTime;
-    if (pl->m_player1) { pl->m_player1->m_holdingButtons = s.hold1; restoreTrail(pl->m_player1, s.wave1); }
-    if (pl->m_player2) { pl->m_player2->m_holdingButtons = s.hold2; restoreTrail(pl->m_player2, s.wave2); }
-}
+double maxDelayMs() { return static_cast<double>(Mod::get()->getSettingValue<int64_t>("max-delay")); }
+double lookaheadMs() { return static_cast<double>(Mod::get()->getSettingValue<int64_t>("lookahead")); }
 
 void sendToGame(PlayLayer* pl, bool down, bool p1) {
+    if (p1) g.heldP1 = down; else g.heldP2 = down;
     g.internal = true;
     pl->handleButton(down, JUMP_BUTTON, p1);
     g.internal = false;
 }
 
-// ---------- Predicción ----------
+void resetCollisionLog(PlayerObject* p) {
+    if (p->m_collisionLogTop) p->m_collisionLogTop->removeAllObjects();
+    if (p->m_collisionLogBottom) p->m_collisionLogBottom->removeAllObjects();
+    if (p->m_collisionLogLeft) p->m_collisionLogLeft->removeAllObjects();
+    if (p->m_collisionLogRight) p->m_collisionLogRight->removeAllObjects();
+}
 
-// Simula: espera `delaySteps` frames, aplica el input, y sigue `lookSteps` frames.
-// Devuelve true si el jugador sobrevive.
-bool simulateOnce(PlayLayer* pl, NewInput const& in, int delaySteps, int lookSteps, float simDt) {
+// Prepara el fantasma como copia del jugador real.
+void prepareGhost(PlayerObject* ghost, PlayerObject* base, bool held) {
+    ghost->copyAttributes(base);
+    ghost->m_gravityMod = base->m_gravityMod;
+    if (held) ghost->pushButton(PlayerButton::Jump);
+    else ghost->releaseButton(PlayerButton::Jump);
+    ghost->m_isOnGround = base->m_isOnGround;
+    ghost->setVisible(false);
+}
+
+// Simula: espera `delayTicks`, aplica el input, sigue `lookTicks`.
+// true = el fantasma sobrevive.
+bool simulateGhost(PlayLayer* pl, PlayerObject* base, bool held,
+                   NewInput const& in, int delayTicks, int lookTicks) {
+    auto ghost = g.ghost;
+    prepareGhost(ghost, base, held);
+
     g.simulating = true;
     g.simDied = false;
-    int total = delaySteps + lookSteps;
-    for (int s = 0; s < total && !g.simDied; ++s) {
-        if (s == delaySteps) sendToGame(pl, in.down, in.p1);
-        pl->update(simDt);
+    int total = delayTicks + lookTicks;
+    for (int t = 0; t < total; ++t) {
+        resetCollisionLog(ghost);
+        pl->checkCollisions(ghost, g.tickDt, false);
+        if (g.simDied) break;
+        if (t == delayTicks) {
+            if (in.down) ghost->pushButton(PlayerButton::Jump);
+            else ghost->releaseButton(PlayerButton::Jump);
+        }
+        ghost->update(g.tickDt);
     }
     g.simulating = false;
     return !g.simDied;
 }
 
-// Devuelve cuántos segundos hay que retrasar el input (0 = ahora).
-double findBestDelay(PlayLayer* pl, NewInput const& in, float dt) {
-    if (!pl->m_player1 || pl->m_player1->m_isDead) return 0.0;
+// Devuelve cuántos frames reales hay que retrasar el input (0 = ahora).
+int findBestDelay(PlayLayer* pl, NewInput const& in, float frameDt) {
+    PlayerObject* base = in.p1 ? pl->m_player1 : pl->m_player2;
+    if (!g.ghost || !base || base->m_isDead) return 0;
 
-    // Paso de simulación: el dt real, pero no menor a 1/120 s para no trabar el juego.
-    float simDt = std::max(dt, 1.0f / 120.0f);
-    int maxSteps = static_cast<int>(std::ceil(maxDelay() / simDt));
-    int lookSteps = std::max(1, static_cast<int>(std::ceil(lookahead() / simDt)));
+    bool held = in.p1 ? g.heldP1 : g.heldP2;
+    int tpf = std::max(1, g.ticksPerFrame);
+    double frameMs = std::max(1.0, frameDt * 1000.0);
+    int maxFrames = static_cast<int>(maxDelayMs() / frameMs);
+    double tickMs = frameMs / tpf;
+    int lookTicks = std::max(1, static_cast<int>(lookaheadMs() / tickMs));
 
-    auto& audio = *FMODAudioEngine::sharedEngine();
-    float sfxVol = audio.m_sfxVolume;
-    audio.m_sfxVolume = 0.f;   // sin sonidos durante la simulación
-
-    SavedState saved = saveState(pl);
-    double result = 0.0;
-    for (int k = 0; k <= maxSteps; ++k) {
-        bool ok = simulateOnce(pl, in, k, lookSteps, simDt);
-        restoreState(pl, saved);
-        if (ok) { result = k * simDt; break; }
+    for (int k = 0; k <= maxFrames; ++k) {
+        if (simulateGhost(pl, base, held, in, k * tpf, lookTicks)) {
+            if (k > 0) log::debug("Click Fix: salto retrasado {} frames", k);
+            return k;
+        }
     }
-
-    audio.m_sfxVolume = sfxVol;
-    if (result > 0) log::debug("Click Fix: input retrasado {:.0f} ms", result * 1000.0);
-    return result;
+    return 0; // nada funciona: comportamiento normal
 }
 
 } // namespace
+
+// ---------------- Hooks principales ----------------
 
 class $modify(CFBaseLayer, GJBaseGameLayer) {
     void handleButton(bool down, int button, bool isPlayer1) {
         auto pl = PlayLayer::get();
         bool ours = pl && static_cast<GJBaseGameLayer*>(pl) == this;
-
-        // Interceptar sólo clics reales del jugador en un nivel.
-        if (ours && !g.internal && !g.simulating && button == JUMP_BUTTON && modEnabled()) {
+        if (ours && !g.internal && button == JUMP_BUTTON && modEnabled()) {
             g.incoming.push_back({ down, isPlayer1 });
             return;
         }
@@ -182,71 +157,161 @@ class $modify(CFBaseLayer, GJBaseGameLayer) {
 
     void update(float dt) {
         auto pl = PlayLayer::get();
-        if (g.simulating || !pl || static_cast<GJBaseGameLayer*>(pl) != this) {
+        if (!pl || static_cast<GJBaseGameLayer*>(pl) != this) {
             GJBaseGameLayer::update(dt);
             return;
         }
 
-        // Si se apaga el mod con inputs en espera, soltarlos de inmediato.
         if (!modEnabled()) {
             for (auto& p : g.pending) sendToGame(pl, p.down, p.p1);
             for (auto& n : g.incoming) sendToGame(pl, n.down, n.p1);
             g.pending.clear();
             g.incoming.clear();
-            GJBaseGameLayer::update(dt);
+        } else {
+            // 1. Decidir el frame de cada input nuevo.
+            for (auto const& in : g.incoming) {
+                int shift = g.pending.empty() ? findBestDelay(pl, in, dt) : g.lastShift;
+                g.lastShift = shift;
+                int fire = g.frame + shift;
+                if (!g.pending.empty()) fire = std::max(fire, g.pending.back().fireFrame);
+                g.pending.push_back({ fire, in.down, in.p1 });
+            }
+            g.incoming.clear();
+
+            // 2. Mandar al juego los que ya toca.
+            while (!g.pending.empty() && g.pending.front().fireFrame <= g.frame) {
+                auto p = g.pending.front();
+                g.pending.pop_front();
+                sendToGame(pl, p.down, p.p1);
+            }
+        }
+
+        // 3. Juego normal.
+        g.ticksThisFrame = 0;
+        GJBaseGameLayer::update(dt);
+        if (g.ticksThisFrame > 0) g.ticksPerFrame = g.ticksThisFrame;
+        g.frame++;
+    }
+
+    // --- bloquear efectos del fantasma ---
+    void collisionCheckObjects(PlayerObject* player, std::vector<GameObject*>* objects, int count, float dt) {
+        if (g.simulating) {
+            std::vector<GameObject*> filtered;
+            for (int i = 0; i < count; i++) {
+                auto obj = objects->at(i);
+                auto t = obj->m_objectType;
+                if (t == GameObjectType::Solid || t == GameObjectType::Hazard ||
+                    t == GameObjectType::AnimatedHazard || t == GameObjectType::Slope) {
+                    filtered.push_back(obj);
+                }
+            }
+            GJBaseGameLayer::collisionCheckObjects(player, &filtered, static_cast<int>(filtered.size()), dt);
             return;
         }
+        GJBaseGameLayer::collisionCheckObjects(player, objects, count, dt);
+    }
 
-        // 1. Decidir cuándo aplicar cada input nuevo.
-        for (auto const& in : g.incoming) {
-            double delay;
-            if (!g.pending.empty()) {
-                // Ya hay un input esperando: mantener el mismo retraso para respetar el orden.
-                delay = g.lastShift;
-            } else {
-                delay = findBestDelay(pl, in, dt);
-                g.lastShift = delay;
-            }
-            double fire = g.time + delay;
-            if (!g.pending.empty()) fire = std::max(fire, g.pending.back().fireTime);
-            g.pending.push_back({ fire, in.down, in.p1 });
-        }
-        g.incoming.clear();
+    bool canBeActivatedByPlayer(PlayerObject* player, EffectGameObject* obj) {
+        if (g.simulating) return false;
+        return GJBaseGameLayer::canBeActivatedByPlayer(player, obj);
+    }
 
-        // 2. Aplicar los inputs cuyo momento ya llegó.
-        while (!g.pending.empty() && g.pending.front().fireTime <= g.time + 1e-6) {
-            auto p = g.pending.front();
-            g.pending.pop_front();
-            sendToGame(pl, p.down, p.p1);
-        }
+    void flipGravity(PlayerObject* player, bool flip, bool noEffects) {
+        if (g.simulating) return;
+        GJBaseGameLayer::flipGravity(player, flip, noEffects);
+    }
 
-        // 3. Avanzar el juego normal.
-        GJBaseGameLayer::update(dt);
-        g.time += dt;
+    void playerTouchedRing(PlayerObject* player, RingObject* ring) {
+        if (g.simulating) return;
+        GJBaseGameLayer::playerTouchedRing(player, ring);
     }
 };
 
 class $modify(CFPlayLayer, PlayLayer) {
     bool init(GJGameLevel* level, bool dontCreateObjects) {
-        g.reset();
-        return PlayLayer::init(level, dontCreateObjects);
+        g.ghost = nullptr;
+        g.resetInputs();
+        if (!PlayLayer::init(level, dontCreateObjects)) return false;
+
+        auto ghost = PlayerObject::create(1, 1, this, this, true);
+        ghost->setPosition({ 0, 105 });
+        ghost->setVisible(false);
+        ghost->setID("click-fix-ghost"_spr);
+        m_objectLayer->addChild(ghost);
+        g.ghost = ghost;
+        return true;
     }
 
     void resetLevel() {
-        if (!g.simulating) g.reset();
+        g.resetInputs();
         PlayLayer::resetLevel();
     }
 
     void onQuit() {
-        g.reset();
+        g.ghost = nullptr;
+        g.resetInputs();
         PlayLayer::onQuit();
     }
 
     void destroyPlayer(PlayerObject* player, GameObject* object) {
-        if (g.simulating) {   // muerte dentro de la simulación: sólo anotarla
+        if (g.simulating && player == g.ghost) {
             g.simDied = true;
             return;
         }
         PlayLayer::destroyPlayer(player, object);
+    }
+
+    void playEndAnimationToPos(CCPoint pos) {
+        if (g.simulating) return;
+        PlayLayer::playEndAnimationToPos(pos);
+    }
+};
+
+class $modify(CFPlayerObject, PlayerObject) {
+    void update(float dt) {
+        PlayerObject::update(dt);
+        if (g.simulating) return;
+        auto pl = PlayLayer::get();
+        if (pl && this == pl->m_player1) {
+            float warp = pl->m_gameState.m_timeWarp;
+            g.tickDt = warp > 0.f ? dt / warp : dt;
+            g.ticksThisFrame++;
+        }
+    }
+
+    void playSpiderDashEffect(CCPoint from, CCPoint to) {
+        if (g.simulating) return;
+        PlayerObject::playSpiderDashEffect(from, to);
+    }
+
+    void incrementJumps() {
+        if (g.simulating) return;
+        PlayerObject::incrementJumps();
+    }
+
+    void ringJump(RingObject* ring, bool skipCheck) {
+        if (g.simulating) return;
+        PlayerObject::ringJump(ring, skipCheck);
+    }
+};
+
+class $modify(CFHardStreak, HardStreak) {
+    void addPoint(CCPoint p) {
+        if (g.simulating) return;
+        HardStreak::addPoint(p);
+    }
+};
+
+class $modify(CFEffectGameObject, EffectGameObject) {
+    void triggerObject(GJBaseGameLayer* layer, int uniqueID, std::vector<int> const* remapKeys) {
+        if (g.simulating) return;
+        EffectGameObject::triggerObject(layer, uniqueID, remapKeys);
+    }
+};
+
+class $modify(CFGameObject, GameObject) {
+    void playShineEffect() {
+        if (g.simulating) return;
+        GameObject::playShineEffect();
     }
 };
