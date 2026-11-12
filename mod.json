@@ -1,46 +1,157 @@
 {
-	"geode": "6.0.0-alpha.1",
-	"gd": {
-		"win": "2.2091",
-		"android": "2.2091",
-		"mac": "2.2091",
-		"ios": "2.2091"
-	},
-	"id": "shaq.click-fix",
-	"name": "Click Fix (Predictive Input Buffer)",
-	"version": "v0.4.0",
-	"developer": "Shaq",
-	"description": "Si das clic un poco antes, retiene el clic y lo da en el tick exacto en que pasas el obstáculo. Sin teletransporte.",
-	"settings": {
-		"enabled": {
-			"type": "bool",
-			"default": true,
-			"name": "Activado",
-			"description": "Enciende o apaga el buffer."
-		},
-		"max-delay-ticks": {
-			"type": "int",
-			"default": 4,
-			"min": 1,
-			"max": 16,
-			"name": "Retraso máximo (ticks)",
-			"description": "Cuánto puede retener tu clic. 4 ticks = 1 frame a 60 FPS (~17 ms). Súbelo si das clic muy temprano.",
-			"control": {
-				"slider": true,
-				"arrows": true
-			}
-		},
-		"max-delay-ticks-wave": {
-			"type": "int",
-			"default": 4,
-			"min": 1,
-			"max": 16,
-			"name": "Retraso máximo en wave (ticks)",
-			"description": "Igual, pero sólo para la wave.",
-			"control": {
-				"slider": true,
-				"arrows": true
-			}
-		}
-	}
+  "geode": "6.0.0-alpha.1",
+  "gd": {
+    "win": "2.2091",
+    "mac": "2.2091",
+    "android": "2.2091",
+    "ios": "2.2091"
+  },
+  "id": "afterflow.prsevend",
+  "name": "Afterflow",
+  "version": "2.2.7-gd2209",
+  "developer": "prsevend",
+  "description": "Port no oficial de Afterflow (por prsevend) a GD 2.2091. a predictive input cheat that fixes your early clicks and makes them accurate, with customizable UI colors and a polished control panel.",
+  "tags": [
+    "gameplay",
+    "utility",
+    "developer"
+  ],
+  "resources": {
+    "files": [
+      "resources/afterflow-body.fnt",
+      "resources/afterflow-body.png",
+      "resources/afterflow-display.fnt",
+      "resources/afterflow-display.png",
+      "resources/afterflow-logo.png",
+      "resources/OFL.txt"
+    ]
+  },
+  "settings": {
+    "terminal-title": {
+      "type": "title",
+      "name": "terminal",
+      "description": "terminal window options",
+      "platforms": [
+        "win",
+        "mac"
+      ]
+    },
+    "terminal-enabled": {
+      "type": "bool",
+      "name": "enable terminal",
+      "description": "show the terminal button in the afterflow control panel",
+      "default": true,
+      "platforms": [
+        "win",
+        "mac"
+      ]
+    },
+    "keybinds-title": {
+      "type": "title",
+      "name": "keybinds",
+      "description": "change geodes keybinding anytime for afterflow",
+      "platforms": [
+        "win",
+        "mac"
+      ]
+    },
+    "keybind-stage": {
+      "type": "keybind",
+      "name": "cycle stages",
+      "description": "cycle prediction stages",
+      "category": "gameplay",
+      "default": [
+        "F6"
+      ],
+      "platforms": [
+        "win",
+        "mac"
+      ]
+    },
+    "keybind-terminal": {
+      "type": "keybind",
+      "name": "control panel",
+      "description": "open or close the afterflow control panel",
+      "category": "universal",
+      "default": [
+        "F9"
+      ],
+      "platforms": [
+        "win",
+        "mac"
+      ]
+    },
+    "ui-title": {
+      "type": "title",
+      "name": "ui customization",
+      "description": "customize the control panel appearance"
+    },
+    "ui-primary-color": {
+      "type": "color",
+      "name": "primary color",
+      "description": "primary gradient color for the panel",
+      "default": "#A855F7"
+    },
+    "ui-secondary-color": {
+      "type": "color",
+      "name": "secondary color",
+      "description": "secondary gradient color for the panel",
+      "default": "#D5B4FF"
+    },
+    "ui-surface-color": {
+      "type": "color",
+      "name": "surface color",
+      "description": "background color of the panel card",
+      "default": "#17131F"
+    },
+    "ui-text-color": {
+      "type": "color",
+      "name": "text color",
+      "description": "color used for all panel text",
+      "default": "#EFE7F7"
+    },
+    "ui-glow": {
+      "type": "bool",
+      "name": "glow",
+      "description": "draw a soft accent glow behind the panel",
+      "default": true
+    },
+    "ui-panel-scale": {
+      "type": "float",
+      "name": "panel scale",
+      "description": "adjust the overall size of the control panel",
+      "default": 0.7,
+      "min": 0.4,
+      "max": 2.0,
+      "step": 0.05
+    },
+    "ui-font-scale": {
+      "type": "float",
+      "name": "font scale",
+      "description": "adjust the text size in the control panel",
+      "default": 1.5,
+      "min": 0.8,
+      "max": 2.0,
+      "step": 0.05
+    },
+    "mobile-title": {
+      "type": "title",
+      "name": "mobile",
+      "description": "android and ios options",
+      "platforms": [
+        "android",
+        "ios"
+      ]
+    },
+    "mobile-floating-button": {
+      "type": "bool",
+      "name": "floating af button",
+      "description": "also show the draggable af button on screen. the pause menu button is always there",
+      "default": false,
+      "platforms": [
+        "android",
+        "ios"
+      ]
+    }
+  }
 }
