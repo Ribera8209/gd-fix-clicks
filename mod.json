@@ -7,36 +7,36 @@
 		"ios": "2.2091"
 	},
 	"id": "shaq.click-fix",
-	"name": "Click Fix",
-	"version": "v0.3.0",
+	"name": "Click Fix (Predictive Input Buffer)",
+	"version": "v0.4.0",
 	"developer": "Shaq",
-	"description": "Al dar clic, una copia invisible del jugador detecta el momento correcto y el salto se da justo ahí. Sin teletransporte.",
+	"description": "Si das clic un poco antes, retiene el clic y lo da en el tick exacto en que pasas el obstáculo. Sin teletransporte.",
 	"settings": {
 		"enabled": {
 			"type": "bool",
 			"default": true,
 			"name": "Activado",
-			"description": "Enciende o apaga la corrección de clics."
+			"description": "Enciende o apaga el buffer."
 		},
-		"max-delay": {
+		"max-delay-ticks": {
 			"type": "int",
-			"default": 120,
-			"min": 0,
-			"max": 300,
-			"name": "Retraso máximo (ms)",
-			"description": "Cuánto puede esperar el mod para dar tu clic en el momento correcto.",
+			"default": 4,
+			"min": 1,
+			"max": 16,
+			"name": "Retraso máximo (ticks)",
+			"description": "Cuánto puede retener tu clic. 4 ticks = 1 frame a 60 FPS (~17 ms). Súbelo si das clic muy temprano.",
 			"control": {
 				"slider": true,
 				"arrows": true
 			}
 		},
-		"lookahead": {
+		"max-delay-ticks-wave": {
 			"type": "int",
-			"default": 200,
-			"min": 50,
-			"max": 500,
-			"name": "Revisión hacia adelante (ms)",
-			"description": "Cuánto simula después del salto para confirmar que pasas el obstáculo. Más alto = más seguro pero más pesado.",
+			"default": 4,
+			"min": 1,
+			"max": 16,
+			"name": "Retraso máximo en wave (ticks)",
+			"description": "Igual, pero sólo para la wave.",
 			"control": {
 				"slider": true,
 				"arrows": true

@@ -3,19 +3,25 @@
 Corrige el timing de tus clics en **todos los vehículos** (cubo, nave, bola, UFO, wave, robot, araña, swing).
 Cuando vas a morir por un clic un poco temprano o tardío, el mod rebobina unos frames, busca el momento correcto para ese clic y lo aplica.
 
-## Cómo funciona (v0.3, jugador fantasma)
-1. Al dar clic, una copia invisible del jugador simula el salto con la física real del juego (sólo choca con bloques, pinchos y rampas).
-2. Si saltar ahora te mata, prueba saltar unos frames después hasta encontrar el momento en que pasas.
-3. El salto real se da en ese frame, normal. El nivel y el jugador real nunca se regresan: sin teletransporte ni trabones.
+## Cómo funciona (v0.4, Predictive Input Buffer)
+1. Al dar clic, una copia invisible del jugador simula el salto con la física real (sólo choca con bloques, pinchos y rampas).
+2. Si saltar ahora sobrevive, el clic pasa normal.
+3. Si choca, busca el primer **tick** (1/240 s) en que el salto sí pasa y lo da exactamente ahí.
+4. El nivel y el jugador real nunca se regresan: sin teletransporte.
 
-Corrige clics **tempranos** (también al soltar en nave/wave). Un clic tardío no se puede corregir. Cerca de orbes, pads y portales la predicción puede fallar.
+Detalles:
+- Nave: no se toca.
+- Soltar sólo se corrige en wave y robot.
+- Si spameas la wave (3+ clics muy rápidos), no retrasa.
+- Si mueres, el buffer se limpia.
+- Un clic tardío no se puede corregir. Cerca de orbes, pads y portales puede fallar.
 
-Técnica basada en "Show Trajectory" de Eclipse Menu (código abierto).
+Ideas basadas en "Show Trajectory" (Eclipse Menu) y en los mods "Predictive Input Buffer" de la comunidad. Implementación propia.
 
 ## Ajustes (en Geode → Click Fix → ⚙️)
 - **Activado**
-- **Retraso máximo** (default 120 ms)
-- **Revisión hacia adelante** (default 200 ms)
+- **Retraso máximo** (default 4 ticks = 1 frame a 60 FPS)
+- **Retraso máximo en wave** (default 4 ticks)
 
 ## Compilar (opción fácil, sin instalar nada)
 1. Crea un repositorio en GitHub y sube esta carpeta.
